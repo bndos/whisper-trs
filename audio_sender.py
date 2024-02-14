@@ -1,5 +1,4 @@
 from flask import Flask, Response, request, jsonify
-import threading
 import os
 import socket
 import wave

@@ -5,7 +5,11 @@ import pyaudio
 import requests
 import torch
 import whisperx
-from transformers.models.pop2piano.feature_extraction_pop2piano import librosa
+import librosa
+from pprint import pprint
+
+from audio_chunk_buffer import AudioChunkBuffer
+from transcription_buffer import TranscriptionBuffer
 
 # Audio stream configuration
 CHUNK = 960000
@@ -21,7 +25,7 @@ HOST = "localhost"
 PORT = 5000
 
 audio_model = whisperx.load_model(
-    "tiny",
+    "small",
     device="cuda" if torch.cuda.is_available() else "cpu",
     compute_type="int8",
     language="fr",
@@ -47,6 +51,7 @@ def main(audio_metadata_url, audio_stream_url):
     # Fetch audio metadata
     metadata = fetch_audio_metadata(audio_metadata_url)
 
+    channels = metadata["channels"]
     rate = metadata["sample_rate"]
     chunk_size = metadata["chunk_size"]
 
@@ -57,33 +62,126 @@ def main(audio_metadata_url, audio_stream_url):
 
     with requests.get(audio_stream_url, stream=True) as r:
         r.raise_for_status()
-        full_data = b""
+        data_window = AudioChunkBuffer(maxlen=3)
+        transcripts_buffer = TranscriptionBuffer(window_duration=15)
         data = b""
+        time_padding = 0
         for chunk in r.iter_content(chunk_size=chunk_size):
             data += chunk
 
             if len(data) < chunk_size:
                 continue
 
-            full_data += data
+            if len(data_window) == 3:
+                time_padding += 5
 
-            data_np = audio_bytes_to_np(data, to_mono=metadata["channels"] == 2)
-            data_np = librosa.resample(
-                data_np, orig_sr=rate, target_sr=TARGET_RATE
-            )
+            data_window.add_chunk(data)
+            window_data = data_window.get_audio_data()
 
-            full_data_np = audio_bytes_to_np(
-                full_data, to_mono=metadata["channels"] == 2
-            )
+            data_np = audio_bytes_to_np(data, to_mono=channels == 2)
+            data_np = librosa.resample(data_np, orig_sr=rate, target_sr=TARGET_RATE)
+
+            full_data_np = audio_bytes_to_np(window_data, to_mono=channels == 2)
             full_data_np = librosa.resample(
                 full_data_np, orig_sr=rate, target_sr=TARGET_RATE
             )
 
             trs = audio_model.transcribe(full_data_np, batch_size=8)
-            print(trs["segments"])
+            model_a, metadata = whisperx.load_align_model(
+                language_code=trs["language"], device="cpu"
+            )
+            trs_aligned = whisperx.align(
+                trs["segments"],
+                model_a,
+                metadata,
+                full_data_np,
+                device="cpu",
+                return_char_alignments=False,
+            )
 
-            stream.write(data_np.tobytes())
-            time.sleep(2)
+            texts = [
+                # {
+                #     "text": segment["text"],
+                #     "start": segment["start"] + time_padding,
+                #     "end": segment["end"] + time_padding,
+                #     "words": [
+                #         {
+                #             "word": word["word"],
+                #             "start": word["start"] + time_padding
+                #             if "start" in word
+                #             else segment["words"][i - 1]["end"] + time_padding
+                #             if i > 0
+                #             else segment["start"] + time_padding,
+
+                #             "end": word["end"] + time_padding
+                #             if "end" in word
+                #             else segment["words"][i + 1]["start"] + time_padding
+                #             if i < len(segment["words"]) - 1
+                #             else segment["end"] + time_padding,
+                #         }
+                #         for i, word in enumerate(segment["words"])
+                #     ],
+                # }
+                # for segment in trs_aligned["segments"]
+            ]
+
+            stream.write(full_data_np.tobytes())
+
+            for segment in trs_aligned["segments"]:
+                words = []
+                last_end = segment["start"]
+                for i, word in enumerate(segment["words"]):
+                    start = last_end
+                    end = None
+                    if "start" in word:
+                        start = word["start"]
+                    if "end" in word:
+                        end = word["end"]
+                    else:
+                        for j in range(i + 1, len(segment["words"])):
+                            if "start" in segment["words"][j]:
+                                end = segment["words"][j]["start"]
+                                break
+                            elif "end" in segment["words"][j]:
+                                end = segment["words"][j]["end"]
+                                break
+                    if end is None:
+                        end = segment["end"]
+                    last_end = end
+                    words.append(
+                        {
+                            "word": word["word"],
+                            "start": start + time_padding,
+                            "end": end + time_padding,
+                        }
+                    )
+                texts.append(
+                    {
+                        "text": segment["text"],
+                        "start": segment["start"] + time_padding,
+                        "end": segment["end"] + time_padding,
+                        "words": words,
+                    }
+                )
+
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+            pprint(texts)
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+            print("-------------------------------")
+
+            transcripts_buffer.add_transcription(texts)
+
+            pprint(transcripts_buffer.get_continuous_transcription())
+
             data = b""
 
     stream.stop_stream()
