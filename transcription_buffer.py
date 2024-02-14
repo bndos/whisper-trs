@@ -7,6 +7,7 @@ support real-time transcription or incremental transcription.
 
 from math import isclose
 from copy import deepcopy
+import pprint
 from typing import Any, Dict, List
 
 
@@ -16,7 +17,7 @@ class TranscriptionBuffer:
     Stores, merges and returns transcriptions.
     """
 
-    def __init__(self, window_duration: float = 15):
+    def __init__(self, window_duration: float = 15.0, chunk_duration: float = 5.0):
         """
         Initializes the TranscriptionBuffer object.
 
@@ -24,115 +25,97 @@ class TranscriptionBuffer:
             buffer_duration (float): The duration of the buffer in seconds.
         """
         self.window_duration = window_duration
+        self.chunk_duration = chunk_duration
         self.buffer_duration = 0.0
         self.equality_treshold = 0.2
         self.buffer = []
 
     def get_closest_segment(
-        self, segment: Dict[str, Any], segments: List[Dict[str, Any]]
-    ) -> tuple[int, Dict[str, Any] | None]:
+        self, query_segment: Dict[str, Any], candidate_segments: List[Dict[str, Any]]
+    ) -> List[tuple[int, Dict[str, Any], float]]:
         """
-        Returns the closest segment to the given segment.
+        Returns the segments sorted by distance to the segment.
 
         Args:
-            segment (Dict[str, Any]): The segment to find the closest segment to.
+            query_segment (Dict[str, Any]): The segment to find in the segments.
+            candidate_segments (List[Dict[str, Any]]): The segments to search in.
 
         Returns:
-            tuple[int, Dict[str, Any]]: The index of the closest segment and the closest segment.
+            List[tuple[int, Dict[str, Any], float]]: The segments sorted by distance to the segment.
         """
 
-        if not segments or len(segments) == 0:
-            return 0, None
+        if not candidate_segments or len(candidate_segments) == 0:
+            raise ValueError("No candidate segments provided")
 
-        close_segment = None
-        close_segment_index = 0
+        candidate_segments_sorted = []
 
-        fallback_segment = segments[0]
-        fallback_segment_distance = float("inf")
-        fallback_segment_index = 0
+        for i, candidate_segment in enumerate(candidate_segments):
+            distance = abs(candidate_segment["start"] - query_segment["start"])
+            candidate_segments_sorted.append((i, candidate_segment, distance))
 
-        for i, candidate_segment in enumerate(segments):
-            distance = abs(candidate_segment["start"] - segment["start"])
+        candidate_segments_sorted = sorted(
+            candidate_segments_sorted, key=lambda x: x[2]
+        )
 
-            if (
-                distance < fallback_segment_distance
-                and candidate_segment["start"] < segment["start"]
-            ):
-                fallback_segment = candidate_segment
-                fallback_segment_index = i
-                fallback_segment_distance = distance
-            if isclose(
-                candidate_segment["start"],
-                segment["start"],
-                abs_tol=self.equality_treshold,
-            ):
-                close_segment = candidate_segment
-                close_segment_index = i
-                break
-
-        if close_segment:
-            return close_segment_index, close_segment
-
-        # print("-------------------")
-        # print("-------------------")
-        # print("-------------------")
-        # print(f"Closest segment: {fallback_segment}")
-        # print(f"Query segment: {segment}")
-        # print(f"Segments: {segments}")
-
-        return fallback_segment_index, fallback_segment
+        return candidate_segments_sorted
 
     def get_segment_by_words(
-        self, query_segment: Dict[str, Any], searched_segment: Dict[str, Any]
-    ) -> Dict[str, Any] | None:
+        self,
+        query_segment: Dict[str, Any],
+        candidate_segments: List[tuple[int, Dict[str, Any], float]],
+    ) -> tuple[int, Dict[str, Any]]:
         """
-        Finds the query_segment in the searched_segment by words.
-        We use the first word of the query_segment to find matches in the searched_segment.
-        We then verify which word has a similar start time and end time to the query_segment's word.
+        Finds the best matching segment in the candidate_segments.
+        We iterate through the words of the query_segment and search for the same word with similar
+        timestamps in the candidate_segments in the candidate_segments.
+        We fall back to an identical word match if we don't find a similar timestamp match.
+        If that fails, we fallback to the first segment in the candidate_segments.
 
         Args:
             query_segment (Dict[str, Any]): The segment to find in the searched_segment.
-            searched_segment (Dict[str, Any]): The segment to search in.
+            candidate_segments (List[Dict[str, Any]]): The segments to search in.
         Returns:
-            List[Dict[str, Any]]: The reconstructed segment with the matching words.
+            tuple[int | None, Dict[str, Any] | None]: The index of the matching segment and the matching segment.
         """
-        query_words = query_segment["words"]
-        searched_words = searched_segment["words"]
-
-        if not query_words or not searched_words:
-            return None
+        if not candidate_segments or len(candidate_segments) == 0:
+            raise ValueError("No candidate segments provided")
 
         matching_words = []
-        # iterate over query words at 4 places
-        # first place is 0, second place is 1/4, third place is 2/4, fourth place is 3/4
-        for q_i in range(0, len(query_words), len(query_words) // 4):
-            query_word = query_words[q_i]
-            for i, searched_word in enumerate(searched_words):
-                q_word = query_word["word"].lower().strip(".,!?")
-                s_word = searched_word["word"].lower().strip(".,!?")
-                if q_word == s_word:
-                    # print("-------------------")
-                    # print("-------------------")
-                    # print("-------------------")
-                    # print(searched_word["start"], query_word["start"])
-                    # print(query_segment["text"])
-                    # print(searched_segment["words"][i:])
-                    # print(
-                    #     isclose(
-                    #         searched_word["start"],
-                    #         query_word["start"],
-                    #         abs_tol=self.equality_treshold,
-                    #     )
-                    # )
-                    if isclose(
-                        searched_word["start"],
-                        query_word["start"],
-                        abs_tol=self.equality_treshold,
-                    ):
-                        matching_words = searched_segment["words"][i:]
-                        break
+        segment_index = 0
+        fallback_matching_words = []
+        fallback_segment_index = 0
+
+        for c_i, candidate_segment, _ in candidate_segments:
+            query_words = query_segment["words"]
+            searched_words = candidate_segment["words"]
+
+            for q_i in range(len(query_words)):
+                query_word = query_words[q_i]
+                for i, searched_word in enumerate(searched_words):
+                    q_word = query_word["word"].lower().strip(".,!?")
+                    s_word = searched_word["word"].lower().strip(".,!?")
+
+                    if q_word == s_word:
+                        if len(fallback_matching_words) == 0:
+                            fallback_matching_words = (
+                                query_words[:q_i] + searched_words[i:]
+                            )
+                            fallback_segment_index = c_i
+
+                        if isclose(
+                            searched_word["start"],
+                            query_word["start"],
+                            abs_tol=self.equality_treshold,
+                        ):
+                            matching_words = query_words[:q_i] + searched_words[i:]
+                            segment_index = c_i
+                            break
+                if len(matching_words) > 0:
+                    break
+
         if len(matching_words) == 0:
-            return None
+            matching_words = fallback_matching_words
+            segment_index = fallback_segment_index
 
         segment = {
             "text": " ".join([word["word"] for word in matching_words]),
@@ -141,7 +124,17 @@ class TranscriptionBuffer:
             "words": matching_words,
         }
 
-        return segment
+        print("=====================================RETURNING SEGMENT=====================================")
+        print("=====================================RETURNING SEGMENT=====================================")
+        print("=====================================RETURNING SEGMENT=====================================")
+        print("=====================================RETURNING SEGMENT=====================================")
+        pprint.pprint(segment)
+        print("=====================================QUERY SEGMENT=====================================")
+        pprint.pprint(query_segment)
+        print("=====================================CANDIDATE SEGMENTS=====================================")
+        pprint.pprint(candidate_segments)
+
+        return segment_index, segment
 
     def add_transcription(self, segments: List[Dict[str, Any]]):
         """
@@ -163,52 +156,21 @@ class TranscriptionBuffer:
         ):
             # print(f"Buffer before stabilization step: {self.buffer}")
             last_segment = self.buffer[-1]
-            closest_segment_index, closest_segment = self.get_closest_segment(
-                last_segment, segments
+            closest_segments = self.get_closest_segment(last_segment, segments)
+
+            matching_segment_index, matching_segment = self.get_segment_by_words(
+                last_segment, closest_segments
             )
-            if closest_segment and isclose(
-                closest_segment["start"],
-                last_segment["start"],
-                abs_tol=self.equality_treshold,
-            ):
-                self.buffer[-1] = closest_segment
-                if closest_segment_index + 1 < len(segments):
-                    self.buffer.extend(segments[closest_segment_index + 1 :])
-            else:
-                # we couldn't find a segment that overlaps with the last segment
-                # so we need to search by word to find the overlapping segment
-                # print(self.buffer[-1])
-                # print(segments)
-                # raise NotImplementedError(
-                #     "Overlapping segments not found for buffer duration"
-                # )
-                matching_segment = self.get_segment_by_words(
-                    last_segment, closest_segment
-                )
-                if matching_segment:
-                    self.buffer[-1] = matching_segment
-                    if closest_segment_index + 1 < len(segments):
-                        self.buffer.extend(segments[closest_segment_index + 1 :])
-                else:
-                    raise NotImplementedError(
-                        "Overlapping segments not found for buffer duration"
-                    )
+            self.buffer[-1] = matching_segment
+            if matching_segment_index + 1 < len(segments):
+                self.buffer.extend(segments[matching_segment_index + 1 :])
 
             # print(f"Buffer stabilization step: {self.buffer}")
         else:
             self.buffer = deepcopy(segments)
             # print(f"Buffer before window duration: {self.buffer}")
 
-        self.buffer_duration = self.buffer[-1]["end"]
-        # print(self.buffer_duration)
-        # print(self.buffer_duration >= self.window_duration)
-        # print(
-        #     isclose(
-        #         self.buffer_duration,
-        #         self.window_duration,
-        #         abs_tol=self.equality_treshold,
-        #     )
-        # )
+        self.buffer_duration += self.chunk_duration
 
     def get_continuous_transcription(self) -> str:
         """
