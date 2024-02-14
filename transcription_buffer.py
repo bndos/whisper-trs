@@ -7,7 +7,6 @@ support real-time transcription or incremental transcription.
 
 from math import isclose
 from copy import deepcopy
-import pprint
 from typing import Any, Dict, List
 
 
@@ -124,16 +123,6 @@ class TranscriptionBuffer:
             "words": matching_words,
         }
 
-        print("=====================================RETURNING SEGMENT=====================================")
-        print("=====================================RETURNING SEGMENT=====================================")
-        print("=====================================RETURNING SEGMENT=====================================")
-        print("=====================================RETURNING SEGMENT=====================================")
-        pprint.pprint(segment)
-        print("=====================================QUERY SEGMENT=====================================")
-        pprint.pprint(query_segment)
-        print("=====================================CANDIDATE SEGMENTS=====================================")
-        pprint.pprint(candidate_segments)
-
         return segment_index, segment
 
     def add_transcription(self, segments: List[Dict[str, Any]]):
@@ -154,7 +143,6 @@ class TranscriptionBuffer:
             self.window_duration,
             abs_tol=self.equality_treshold,
         ):
-            # print(f"Buffer before stabilization step: {self.buffer}")
             last_segment = self.buffer[-1]
             closest_segments = self.get_closest_segment(last_segment, segments)
 
@@ -165,10 +153,8 @@ class TranscriptionBuffer:
             if matching_segment_index + 1 < len(segments):
                 self.buffer.extend(segments[matching_segment_index + 1 :])
 
-            # print(f"Buffer stabilization step: {self.buffer}")
         else:
             self.buffer = deepcopy(segments)
-            # print(f"Buffer before window duration: {self.buffer}")
 
         self.buffer_duration += self.chunk_duration
 

@@ -24,11 +24,16 @@ PCM_16BIT_MAX = 32768.0
 HOST = "localhost"
 PORT = 5000
 
+# Model configuration
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+COMPUTE_TYPE = "float32" if torch.cuda.is_available() else "int8"
+LANGUAGE = "fr"
+
 audio_model = whisperx.load_model(
     "small",
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    compute_type="int8",
-    language="fr",
+    device=DEVICE,
+    compute_type=COMPUTE_TYPE,
+    language=LANGUAGE,
 )
 
 
@@ -88,42 +93,18 @@ def main(audio_metadata_url, audio_stream_url):
 
             trs = audio_model.transcribe(full_data_np, batch_size=8)
             model_a, metadata = whisperx.load_align_model(
-                language_code=trs["language"], device="cpu"
+                language_code=trs["language"], device=DEVICE
             )
             trs_aligned = whisperx.align(
                 trs["segments"],
                 model_a,
                 metadata,
                 full_data_np,
-                device="cpu",
+                device=DEVICE,
                 return_char_alignments=False,
             )
 
-            texts = [
-                # {
-                #     "text": segment["text"],
-                #     "start": segment["start"] + time_padding,
-                #     "end": segment["end"] + time_padding,
-                #     "words": [
-                #         {
-                #             "word": word["word"],
-                #             "start": word["start"] + time_padding
-                #             if "start" in word
-                #             else segment["words"][i - 1]["end"] + time_padding
-                #             if i > 0
-                #             else segment["start"] + time_padding,
-
-                #             "end": word["end"] + time_padding
-                #             if "end" in word
-                #             else segment["words"][i + 1]["start"] + time_padding
-                #             if i < len(segment["words"]) - 1
-                #             else segment["end"] + time_padding,
-                #         }
-                #         for i, word in enumerate(segment["words"])
-                #     ],
-                # }
-                # for segment in trs_aligned["segments"]
-            ]
+            texts = []
 
             stream.write(full_data_np.tobytes())
 
@@ -163,20 +144,6 @@ def main(audio_metadata_url, audio_stream_url):
                         "words": words,
                     }
                 )
-
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
-            pprint(texts)
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
-            print("-------------------------------")
 
             transcripts_buffer.add_transcription(texts)
 
