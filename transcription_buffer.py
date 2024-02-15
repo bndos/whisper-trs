@@ -113,6 +113,12 @@ class TranscriptionBuffer:
                     break
 
         if len(matching_words) == 0:
+            if len(fallback_matching_words) == 0:
+                fallback_matching_words = (
+                    query_segment["words"] + candidate_segments[0][1]["words"]
+                )
+                fallback_segment_index = candidate_segments[0][0]
+
             matching_words = fallback_matching_words
             segment_index = fallback_segment_index
 
